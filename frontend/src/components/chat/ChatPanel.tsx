@@ -1,2 +1,204 @@
-import{useEffect,useRef,useState}from'react';import type{Conversation,Message,User}from'../../types';import{socket}from'../../services/socket';import{MessageBubble}from'./MessageBubble';
-export function ChatPanel({me,conversation,messages,typing,onMessage}:{me:User;conversation:Conversation|null;messages:Message[];typing:string|null;onMessage:(m:Message)=>void}){const[text,setText]=useState(''),[timer,setTimer]=useState<number|undefined>();const bottom=useRef<HTMLDivElement>(null);const peer=conversation?.participants?.map(p=>p.user).find(u=>u.id!==me.id);useEffect(()=>bottom.current?.scrollIntoView({behavior:'smooth'}),[messages]);if(!conversation||!peer)return <section className="empty">Select a conversation<br/><small>Choose someone to start chatting</small></section>;const send=(type:Message['type']='TEXT',content=text)=>{if(!content.trim())return;socket.emit('message:send',{conversationId:conversation.id,receiverId:peer.id,type,content},r=>{if(r.success)onMessage(r.data)});setText('');socket.emit('typing:stop',{conversationId:conversation.id,receiverId:peer.id})};return <section className="chat"><header><div><b>{peer.displayName}</b><small>{peer.status==='ONLINE'?'Online':peer.lastSeen?`Last seen ${new Date(peer.lastSeen).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}`:'Offline'}</small></div><button aria-label="Voice call" title="Voice call" onClick={()=>window.dispatchEvent(new CustomEvent('call',{detail:{peer,type:'VOICE'}}))}>📞</button><button aria-label="Video call" title="Video call" onClick={()=>window.dispatchEvent(new CustomEvent('call',{detail:{peer,type:'VIDEO'}}))}>📹</button></header><div className="messages">{messages.map(m=><MessageBubble key={m.id} message={m} me={me}/>)}{typing&&<p className="typing">{typing} is typing…</p>}<div ref={bottom}/></div><form className="composer" onSubmit={e=>{e.preventDefault();send()}}><button type="button" aria-label="Send emoji" onClick={()=>send('EMOJI','😂')}>😀</button><button type="button" aria-label="Send sticker" onClick={()=>send('STICKER','party')}>🎉</button><input value={text} onChange={e=>{setText(e.target.value);socket.emit('typing:start',{conversationId:conversation.id,receiverId:peer.id});window.clearTimeout(timer);setTimer(window.setTimeout(()=>socket.emit('typing:stop',{conversationId:conversation.id,receiverId:peer.id}),900))}} placeholder="Type a message..."/><button aria-label="Send message">➤</button></form></section>}
+import { useEffect, useRef, useState } from 'react';
+import type { Conversation, Message, User } from '../../types';
+import { socket } from '../../services/socket';
+import { MessageBubble } from './MessageBubble';
+
+export function ChatPanel({
+  me,
+  conversation,
+  messages,
+  typing,
+  onMessage
+}: {
+  me: User;
+  conversation: Conversation | null;
+  messages: Message[];
+  typing: string | null;
+  onMessage: (m: Message) => void;
+}) {
+  const [text, setText] = useState('');
+  const [timer, setTimer] = useState<number | undefined>();
+
+  const bottom = useRef<HTMLDivElement>(null);
+
+  const peer = conversation?.participants
+    ?.map(p => p.user)
+    .find(u => u.id !== me.id);
+
+  useEffect(() => {
+    bottom.current?.scrollIntoView({
+      behavior: 'smooth'
+    });
+  }, [messages]);
+
+  if (!conversation || !peer) {
+    return (
+      <section className="empty">
+        Select a conversation
+        <br />
+        <small>Choose someone to start chatting</small>
+      </section>
+    );
+  }
+
+  const send = (
+    type: Message['type'] = 'TEXT',
+    content = text
+  ) => {
+    if (!content.trim()) return;
+
+    socket.emit(
+      'message:send',
+      {
+        conversationId: conversation.id,
+        receiverId: peer.id,
+        type,
+        content
+      },
+      (r: { success: boolean; data: Message }) => {
+        if (r.success) {
+          onMessage(r.data);
+        }
+      }
+    );
+
+    setText('');
+
+    socket.emit('typing:stop', {
+      conversationId: conversation.id,
+      receiverId: peer.id
+    });
+  };
+
+  return (
+    <section className="chat">
+      <header>
+        <div>
+          <b>{peer.displayName}</b>
+
+          <small>
+            {peer.status === 'ONLINE'
+              ? 'Online'
+              : peer.lastSeen
+                ? `Last seen ${new Date(
+                    peer.lastSeen
+                  ).toLocaleTimeString([], {
+                    hour: 'numeric',
+                    minute: '2-digit'
+                  })}`
+                : 'Offline'}
+          </small>
+        </div>
+
+        <button
+          type="button"
+          aria-label="Voice call"
+          title="Voice call"
+          onClick={() =>
+            window.dispatchEvent(
+              new CustomEvent('call', {
+                detail: {
+                  peer,
+                  type: 'VOICE'
+                }
+              })
+            )
+          }
+        >
+          📞
+        </button>
+
+        <button
+          type="button"
+          aria-label="Video call"
+          title="Video call"
+          onClick={() =>
+            window.dispatchEvent(
+              new CustomEvent('call', {
+                detail: {
+                  peer,
+                  type: 'VIDEO'
+                }
+              })
+            )
+          }
+        >
+          📹
+        </button>
+      </header>
+
+      <div className="messages">
+        {messages.map(m => (
+          <MessageBubble
+            key={m.id}
+            message={m}
+            me={me}
+          />
+        ))}
+
+        {typing && (
+          <p className="typing">
+            {typing} is typing…
+          </p>
+        )}
+
+        <div ref={bottom} />
+      </div>
+
+      <form
+        className="composer"
+        onSubmit={e => {
+          e.preventDefault();
+          send();
+        }}
+      >
+        <button
+          type="button"
+          aria-label="Send emoji"
+          onClick={() => send('EMOJI', '😂')}
+        >
+          😀
+        </button>
+
+        <button
+          type="button"
+          aria-label="Send sticker"
+          onClick={() => send('STICKER', 'party')}
+        >
+          🎉
+        </button>
+
+        <input
+          value={text}
+          onChange={e => {
+            setText(e.target.value);
+
+            socket.emit('typing:start', {
+              conversationId: conversation.id,
+              receiverId: peer.id
+            });
+
+            window.clearTimeout(timer);
+
+            setTimer(
+              window.setTimeout(() => {
+                socket.emit('typing:stop', {
+                  conversationId: conversation.id,
+                  receiverId: peer.id
+                });
+              }, 900)
+            );
+          }}
+          placeholder="Type a message..."
+        />
+
+        <button
+          type="submit"
+          aria-label="Send message"
+        >
+          ➤
+        </button>
+      </form>
+    </section>
+  );
+}
