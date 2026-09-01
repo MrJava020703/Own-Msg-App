@@ -1,0 +1,179 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ONLINE
+  OFFLINE
+  AWAY
+}
+
+enum ConversationType {
+  PRIVATE
+}
+
+enum MessageType {
+  TEXT
+  EMOJI
+  STICKER
+  GIF
+  IMAGE
+  FILE
+  SYSTEM
+}
+
+enum CallType {
+  VOICE
+  VIDEO
+}
+
+enum CallStatus {
+  RINGING
+  ACCEPTED
+  REJECTED
+  MISSED
+  ENDED
+  FAILED
+}
+
+model User {
+  id               String                    @id @default(uuid())
+  displayName      String                    @db.VarChar(80)
+  avatar           String?
+  status           UserStatus                @default(OFFLINE)
+  lastSeen         DateTime?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+  sessions         UserSession[]
+  sentMessages     Message[]                 @relation("sentMessages")
+  receivedMessages Message[]                 @relation("receivedMessages")
+  reactions        MessageReaction[]
+  readReceipts     MessageRead[]
+  conversations    ConversationParticipant[]
+  outgoingCalls    Call[]                    @relation("outgoingCalls")
+  incomingCalls    Call[]                    @relation("incomingCalls")
+
+  @@index([displayName])
+  @@index([status])
+}
+
+model UserSession {
+  id           String   @id @default(uuid())
+  userId       String
+  socketId     String   @unique
+  createdAt    DateTime @default(now())
+  lastActiveAt DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([socketId])
+}
+
+model Conversation {
+  id           String                    @id @default(uuid())
+  type         ConversationType          @default(PRIVATE)
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@index([updatedAt])
+}
+
+model ConversationParticipant {
+  id             String       @id @default(uuid())
+  conversationId String
+  userId         String
+  joinedAt       DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@index([conversationId])
+}
+
+model Message {
+  id             String              @id @default(uuid())
+  conversationId String
+  senderId       String
+  receiverId     String
+  type           MessageType
+  content        String
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  editedAt       DateTime?
+  deletedAt      DateTime?
+  replyToId      String?
+  conversation   Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User                @relation("sentMessages", fields: [senderId], references: [id])
+  receiver       User                @relation("receivedMessages", fields: [receiverId], references: [id])
+  attachments    MessageAttachment[]
+  reactions      MessageReaction[]
+  readReceipts   MessageRead[]
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@index([receiverId])
+}
+
+model MessageAttachment {
+  id        String   @id @default(uuid())
+  messageId String
+  url       String
+  fileName  String
+  mimeType  String
+  fileSize  Int
+  createdAt DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+}
+
+model MessageReaction {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+}
+
+model MessageRead {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  readAt    DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+}
+
+model Call {
+  id         String     @id @default(uuid())
+  callerId   String
+  receiverId String
+  type       CallType
+  status     CallStatus @default(RINGING)
+  startedAt  DateTime?
+  endedAt    DateTime?
+  duration   Int?
+  createdAt  DateTime   @default(now())
+  caller     User       @relation("outgoingCalls", fields: [callerId], references: [id])
+  receiver   User       @relation("incomingCalls", fields: [receiverId], references: [id])
+
+  @@index([callerId])
+  @@index([receiverId])
+  @@index([createdAt])
+}
