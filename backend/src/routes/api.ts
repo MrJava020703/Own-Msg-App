@@ -2,7 +2,6 @@ import { Router } from 'express'; import { z } from 'zod'; import { prisma } fro
 export const api=Router(); const ok=(res:any,data:any)=>res.json({success:true,data});
 api.get('/health',(_q,res)=>ok(res,{status:'ok'}));
 api.post('/users',async(req,res,next)=>{try{ok(res,await users.create(z.object({displayName:z.string().trim().min(1).max(80)}).parse(req.body).displayName))}catch(e){next(e)}});
-api.get('/users',async(_req,res,next)=>{try{ok(res,await prisma.user.findMany({select:{id:true,displayName:true,avatar:true,status:true,lastSeen:true},orderBy:[{status:'asc'},{displayName:'asc'}],take:100}))}catch(e){next(e)}});
 api.get('/users/search',async(req,res,next)=>{try{const q=z.string().trim().max(80).parse(req.query.q??'');ok(res,await prisma.user.findMany({where:{displayName:{contains:q,mode:'insensitive'}},select:{id:true,displayName:true,avatar:true,status:true,lastSeen:true},take:30}))}catch(e){next(e)}});
 api.get('/users/:id',async(req,res,next)=>{try{const u=await users.public(req.params.id);if(!u)return res.status(404).json({success:false,error:{code:'NOT_FOUND',message:'User not found'}});ok(res,u)}catch(e){next(e)}});
 api.post('/conversations',async(req,res,next)=>{try{const p=z.object({userId:z.string().uuid(),receiverId:z.string().uuid()}).parse(req.body);ok(res,await conversations.privateFor(p.userId,p.receiverId))}catch(e){next(e)}});
