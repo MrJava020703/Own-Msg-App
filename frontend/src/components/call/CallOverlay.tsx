@@ -34,134 +34,66 @@ interface SignalPayload {
   candidate?: RTCIceCandidateInit;
 }
 
-export function CallOverlay({
-  me,
-}: {
-  me: User;
-}) {
-  const [call, setCall] =
-    useState<Call | null>(null);
+export function CallOverlay({ me }: { me: User }) {
+  const [call, setCall] = useState<Call | null>(null);
+  const [peer, setPeer] = useState<User | null>(null);
+  const [status, setStatus] = useState<CallStatus>("RINGING");
+  const [muted, setMuted] = useState(false);
+  const [cameraOff, setCameraOff] = useState(false);
+  const [seconds, setSeconds] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [audioBlocked, setAudioBlocked] = useState(false);
+  const [remoteVideo, setRemoteVideo] = useState(false);
+  const [remoteConnected, setRemoteConnected] = useState(false);
 
-  const [peer, setPeer] =
-    useState<User | null>(null);
+  const callRef = useRef<Call | null>(null);
+  const peerRef = useRef<User | null>(null);
 
-  const [status, setStatus] =
-    useState<CallStatus>("RINGING");
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
 
-  const [muted, setMuted] =
-    useState(false);
-
-  const [cameraOff, setCameraOff] =
-    useState(false);
-
-  const [seconds, setSeconds] =
-    useState(0);
-
-  const [error, setError] =
-    useState<string | null>(null);
-
-  const [audioBlocked, setAudioBlocked] =
-    useState(false);
-
-  const [remoteVideo, setRemoteVideo] =
-    useState(false);
-
-  const [remoteConnected, setRemoteConnected] =
-    useState(false);
-
-  const callRef =
-    useRef<Call | null>(null);
-
-  const peerRef =
-    useRef<User | null>(null);
-
-  const pcRef =
-    useRef<RTCPeerConnection | null>(null);
-
-  const localStreamRef =
-    useRef<MediaStream | null>(null);
-
-  const remoteStreamRef =
-    useRef<MediaStream | null>(null);
-
-  const localVideoRef =
-    useRef<HTMLVideoElement | null>(null);
-
-  const remoteVideoRef =
-    useRef<HTMLVideoElement | null>(null);
-
-  const remoteAudioRef =
-    useRef<HTMLAudioElement | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const pendingOfferRef =
-    useRef<RTCSessionDescriptionInit | null>(
-      null
-    );
+    useRef<RTCSessionDescriptionInit | null>(null);
 
-  /**
-   * IMPORTANT:
-   * ICE candidates can arrive before the
-   * RTCPeerConnection is ready.
-   *
-   * We queue them instead of losing them.
-   */
   const pendingIceCandidatesRef =
     useRef<RTCIceCandidateInit[]>([]);
 
-  const cleanupRef =
-    useRef<() => void>(() => {});
-
-  const formatTime = (
-    totalSeconds: number
-  ) => {
-    const minutes = Math.floor(
-      totalSeconds / 60
-    )
+  const formatTime = (totalSeconds: number) => {
+    const minutes = Math.floor(totalSeconds / 60)
       .toString()
       .padStart(2, "0");
 
-    const secondsPart = (
-      totalSeconds % 60
-    )
+    const secondsPart = (totalSeconds % 60)
       .toString()
       .padStart(2, "0");
 
     return `${minutes}:${secondsPart}`;
   };
 
-  /**
-   * Play remote audio.
-   */
   const playRemoteAudio = async () => {
-    const audio =
-      remoteAudioRef.current;
+    const audio = remoteAudioRef.current;
 
-    if (!audio) return;
+    if (!audio) {
+      return;
+    }
 
     try {
       await audio.play();
-
       setAudioBlocked(false);
     } catch {
-      /**
-       * Browser autoplay policy can block
-       * remote audio until user interaction.
-       */
       setAudioBlocked(true);
     }
   };
 
-  /**
-   * Attach remote stream to audio/video.
-   */
-  const attachRemoteStream = (
-    stream: MediaStream
-  ) => {
-    remoteStreamRef.current =
-      stream;
+  const attachRemoteStream = (stream: MediaStream) => {
+    remoteStreamRef.current = stream;
 
-    const video =
-      remoteVideoRef.current;
+    const video = remoteVideoRef.current;
 
     if (video) {
       video.srcObject = stream;
@@ -169,23 +101,16 @@ export function CallOverlay({
       video.playsInline = true;
     }
 
-    const audio =
-      remoteAudioRef.current;
+    const audio = remoteAudioRef.current;
 
     if (audio) {
       audio.srcObject = stream;
       audio.autoplay = true;
-
       void playRemoteAudio();
     }
   };
 
-  /**
-   * Create media stream.
-   */
-  const getMedia = async (
-    type: CallType
-  ) => {
+  const getMedia = async (type: CallType) => {
     if (
       !navigator.mediaDevices ||
       !navigator.mediaDevices.getUserMedia
@@ -196,66 +121,51 @@ export function CallOverlay({
     }
 
     const stream =
-      await navigator.mediaDevices.getUserMedia(
-        {
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-          video:
-            type === "VIDEO"
-              ? {
-                  width: {
-                    ideal: 1280,
-                  },
-                  height: {
-                    ideal: 720,
-                  },
-                  facingMode: "user",
-                }
-              : false,
-        }
-      );
+      await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video:
+          type === "VIDEO"
+            ? {
+                width: {
+                  ideal: 1280,
+                },
+                height: {
+                  ideal: 720,
+                },
+                facingMode: "user",
+              }
+            : false,
+      });
 
-    localStreamRef.current =
-      stream;
+    localStreamRef.current = stream;
 
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject =
-        stream;
+    const localVideo = localVideoRef.current;
 
-      localVideoRef.current.muted =
-        true;
-
-      localVideoRef.current.autoplay =
-        true;
-
-      localVideoRef.current.playsInline =
-        true;
+    if (localVideo) {
+      localVideo.srcObject = stream;
+      localVideo.muted = true;
+      localVideo.autoplay = true;
+      localVideo.playsInline = true;
     }
 
     return stream;
   };
 
-  /**
-   * Flush ICE candidates that arrived
-   * before the PeerConnection existed.
-   */
   const flushPendingIce = async (
     pc: RTCPeerConnection
   ) => {
     const candidates =
       pendingIceCandidatesRef.current;
 
-    pendingIceCandidatesRef.current =
-      [];
+    pendingIceCandidatesRef.current = [];
 
     for (const candidate of candidates) {
       try {
-        await pc.addIceCandidate(
-          candidate
-        );
+        await pc.addIceCandidate(candidate);
       } catch (err) {
         console.warn(
           "Unable to add queued ICE candidate",
@@ -265,83 +175,52 @@ export function CallOverlay({
     }
   };
 
-  /**
-   * Create PeerConnection.
-   */
   const createPeerConnection = async (
     currentCall: Call,
     currentPeer: User,
     stream: MediaStream
   ) => {
-    /**
-     * Close an old connection if one exists.
-     */
     if (pcRef.current) {
       try {
         pcRef.current.close();
-      } catch {}
+      } catch {
+        // Ignore
+      }
     }
 
-    /**
-     * STUN server.
-     *
-     * TURN can be added later for difficult
-     * NAT/mobile/corporate networks.
-     */
-    const pc =
-      new RTCPeerConnection({
-        iceServers: [
-          {
-            urls:
-              "stun:stun.l.google.com:19302",
-          },
-        ],
-      });
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        {
+          urls: "stun:stun.l.google.com:19302",
+        },
+      ],
+    });
 
     pcRef.current = pc;
 
-    /**
-     * Add local audio/video tracks.
-     */
     for (const track of stream.getTracks()) {
-      pc.addTrack(
-        track,
-        stream
-      );
+      pc.addTrack(track, stream);
     }
 
-    /**
-     * Remote media.
-     */
     pc.ontrack = (event) => {
-      const stream =
-        event.streams?.[0];
+      const stream = event.streams?.[0];
 
-      if (!stream) return;
+      if (!stream) {
+        return;
+      }
 
       attachRemoteStream(stream);
 
-      if (
-        event.track.kind ===
-        "video"
-      ) {
+      if (event.track.kind === "video") {
         setRemoteVideo(true);
       }
 
-      if (
-        event.track.kind ===
-        "audio"
-      ) {
+      if (event.track.kind === "audio") {
         void playRemoteAudio();
       }
     };
 
-    /**
-     * ICE candidate.
-     */
-    pc.onicecandidate = (
-      event
-    ) => {
+    pc.onicecandidate = (event) => {
       if (
         !event.candidate ||
         !currentPeer.id ||
@@ -350,161 +229,97 @@ export function CallOverlay({
         return;
       }
 
-      socket.emit(
-        "webrtc:ice-candidate",
-        {
-          callId:
-            currentCall.id,
-          targetId:
-            currentPeer.id,
-          candidate:
-            event.candidate.toJSON(),
-        }
+      socket.emit("webrtc:ice-candidate", {
+        callId: currentCall.id,
+        targetId: currentPeer.id,
+        candidate: event.candidate.toJSON(),
+      });
+    };
+
+    pc.onconnectionstatechange = () => {
+      const connectionState = pc.connectionState;
+
+      console.log(
+        "[WebRTC] connection:",
+        connectionState
+      );
+
+      if (connectionState === "connected") {
+        setStatus("CONNECTED");
+        setRemoteConnected(true);
+        void playRemoteAudio();
+      }
+
+      if (
+        connectionState === "failed" ||
+        connectionState === "disconnected"
+      ) {
+        setRemoteConnected(false);
+      }
+
+      if (connectionState === "closed") {
+        setRemoteConnected(false);
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log(
+        "[WebRTC] ICE:",
+        pc.iceConnectionState
       );
     };
 
-    /**
-     * Connection state.
-     */
-    pc.onconnectionstatechange =
-      () => {
-        const state =
-          pc.connectionState;
-
-        console.log(
-          "[WebRTC] connection:",
-          state
-        );
-
-        if (
-          state ===
-          "connected"
-        ) {
-          setStatus(
-            "CONNECTED"
-          );
-
-          setRemoteConnected(
-            true
-          );
-
-          void playRemoteAudio();
-        }
-
-        if (
-          state ===
-            "failed" ||
-          state ===
-            "disconnected"
-        ) {
-          setRemoteConnected(
-            false
-          );
-        }
-
-        if (
-          state ===
-          "closed"
-        ) {
-          setRemoteConnected(
-            false
-          );
-        }
-      };
-
-    /**
-     * ICE connection state.
-     */
-    pc.oniceconnectionstatechange =
-      () => {
-        console.log(
-          "[WebRTC] ICE:",
-          pc.iceConnectionState
-        );
-      };
-
-    /**
-     * Flush candidates that arrived
-     * before this connection was ready.
-     */
     await flushPendingIce(pc);
 
     return pc;
   };
 
-  /**
-   * Cleanup everything.
-   */
   const cleanup = () => {
-    const currentCall =
-      callRef.current;
-
-    if (currentCall) {
-      /**
-       * Do not emit call:end here.
-       *
-       * Cleanup can also happen because
-       * the remote user ended the call.
-       */
-    }
-
     if (pcRef.current) {
       try {
-        pcRef.current.ontrack =
-          null;
-
-        pcRef.current.onicecandidate =
-          null;
-
-        pcRef.current.onconnectionstatechange =
-          null;
-
+        pcRef.current.ontrack = null;
+        pcRef.current.onicecandidate = null;
+        pcRef.current.onconnectionstatechange = null;
+        pcRef.current.oniceconnectionstatechange = null;
         pcRef.current.close();
-      } catch {}
+      } catch {
+        // Ignore
+      }
     }
 
     pcRef.current = null;
 
     if (localStreamRef.current) {
       for (const track of localStreamRef.current.getTracks()) {
-        track.stop();
+        try {
+          track.stop();
+        } catch {
+          // Ignore
+        }
       }
     }
 
-    localStreamRef.current =
-      null;
+    localStreamRef.current = null;
 
     if (localVideoRef.current) {
-      localVideoRef.current.srcObject =
-        null;
+      localVideoRef.current.srcObject = null;
     }
 
     if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject =
-        null;
+      remoteVideoRef.current.srcObject = null;
     }
 
     if (remoteAudioRef.current) {
-      remoteAudioRef.current.srcObject =
-        null;
-
       remoteAudioRef.current.pause();
+      remoteAudioRef.current.srcObject = null;
     }
 
-    remoteStreamRef.current =
-      null;
+    remoteStreamRef.current = null;
+    pendingOfferRef.current = null;
+    pendingIceCandidatesRef.current = [];
 
-    pendingOfferRef.current =
-      null;
-
-    pendingIceCandidatesRef.current =
-      [];
-
-    callRef.current =
-      null;
-
-    peerRef.current =
-      null;
+    callRef.current = null;
+    peerRef.current = null;
 
     setCall(null);
     setPeer(null);
@@ -518,115 +333,115 @@ export function CallOverlay({
     setRemoteConnected(false);
   };
 
-  cleanupRef.current =
-    cleanup;
-
-  /**
-   * Timer.
+  /*
+   * Cleanup WebRTC resources when component unmounts.
    */
   useEffect(() => {
-    if (
-      status !==
-      "CONNECTED"
-    ) {
-      return;
+    return () => {
+      if (pcRef.current) {
+        try {
+          pcRef.current.close();
+        } catch {
+          // Ignore
+        }
+      }
+
+      pcRef.current = null;
+
+      if (localStreamRef.current) {
+        for (const track of localStreamRef.current.getTracks()) {
+          try {
+            track.stop();
+          } catch {
+            // Ignore
+          }
+        }
+      }
+
+      localStreamRef.current = null;
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = null;
+      }
+
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = null;
+      }
+
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.pause();
+        remoteAudioRef.current.srcObject = null;
+      }
+
+      remoteStreamRef.current = null;
+      callRef.current = null;
+      peerRef.current = null;
+      pendingOfferRef.current = null;
+      pendingIceCandidatesRef.current = [];
+    };
+  }, []);
+
+  /*
+   * Call timer.
+   */
+  useEffect(() => {
+    if (status !== "CONNECTED") {
+      return undefined;
     }
 
-    const timer =
-      window.setInterval(() => {
-        setSeconds(
-          (value) =>
-            value + 1
-        );
-      }, 1000);
+    const timer = window.setInterval(() => {
+      setSeconds((value) => value + 1);
+    }, 1000);
 
-    return () =>
-      window.clearInterval(
-        timer
-      );
+    return () => {
+      window.clearInterval(timer);
+    };
   }, [status]);
 
-  /**
-   * Incoming call + WebRTC signalling.
+  /*
+   * Incoming calls + WebRTC signalling.
    */
   useEffect(() => {
-    /**
-     * Incoming call.
-     */
     const onIncoming = (
       payload: IncomingCallPayload
     ) => {
-      if (
-        !payload?.call ||
-        !payload?.caller
-      ) {
+      if (!payload?.call || !payload?.caller) {
         return;
       }
 
-      /**
-       * Ignore calls that aren't for us.
-       */
-      if (
-        payload.call.receiverId !==
-        me.id
-      ) {
+      if (payload.call.receiverId !== me.id) {
         return;
       }
 
-      /**
-       * Don't overwrite an active call.
-       */
       if (callRef.current) {
         return;
       }
 
-      callRef.current =
-        payload.call;
+      callRef.current = payload.call;
+      peerRef.current = payload.caller;
 
-      peerRef.current =
-        payload.caller;
-
-      setCall(
-        payload.call
-      );
-
-      setPeer(
-        payload.caller
-      );
-
+      setCall(payload.call);
+      setPeer(payload.caller);
       setStatus("RINGING");
       setError(null);
       setSeconds(0);
     };
 
-    /**
-     * WebRTC offer.
-     *
-     * We STORE it because receiver may
-     * not have accepted the call yet.
-     */
-    const onOffer = (
-      payload: SignalPayload
-    ) => {
+    const onOffer = (payload: SignalPayload) => {
       if (!payload?.sdp) {
         return;
       }
 
       if (
         callRef.current &&
-        payload.callId !==
-          callRef.current.id
+        payload.callId !== callRef.current.id
       ) {
         return;
       }
 
-      pendingOfferRef.current =
-        payload.sdp;
+      pendingOfferRef.current = payload.sdp;
     };
 
-    /**
-     * WebRTC answer.
-     */
     const onAnswer = async (
       payload: SignalPayload
     ) => {
@@ -636,14 +451,12 @@ export function CallOverlay({
 
       if (
         callRef.current &&
-        payload.callId !==
-          callRef.current.id
+        payload.callId !== callRef.current.id
       ) {
         return;
       }
 
-      const pc =
-        pcRef.current;
+      const pc = pcRef.current;
 
       if (!pc) {
         return;
@@ -651,19 +464,12 @@ export function CallOverlay({
 
       try {
         await pc.setRemoteDescription(
-          new RTCSessionDescription(
-            payload.sdp
-          )
+          new RTCSessionDescription(payload.sdp)
         );
 
-        await flushPendingIce(
-          pc
-        );
+        await flushPendingIce(pc);
 
-        setStatus(
-          "CONNECTED"
-        );
-
+        setStatus("CONNECTED");
         void playRemoteAudio();
       } catch (err) {
         console.error(
@@ -677,13 +483,6 @@ export function CallOverlay({
       }
     };
 
-    /**
-     * ICE.
-     *
-     * IMPORTANT:
-     * Never discard candidates simply
-     * because PC isn't ready yet.
-     */
     const onIceCandidate = async (
       payload: SignalPayload
     ) => {
@@ -693,14 +492,12 @@ export function CallOverlay({
 
       if (
         callRef.current &&
-        payload.callId !==
-          callRef.current.id
+        payload.callId !== callRef.current.id
       ) {
         return;
       }
 
-      const pc =
-        pcRef.current;
+      const pc = pcRef.current;
 
       if (!pc) {
         pendingIceCandidatesRef.current.push(
@@ -722,14 +519,9 @@ export function CallOverlay({
       }
     };
 
-    /**
-     * Call accepted.
-     */
-    const onAccepted = (
-      payload: {
-        call: Call;
-      }
-    ) => {
+    const onAccepted = (payload: {
+      call: Call;
+    }) => {
       if (
         !payload?.call ||
         !callRef.current
@@ -744,22 +536,12 @@ export function CallOverlay({
         return;
       }
 
-      /**
-       * Caller waits for WebRTC answer.
-       */
-      setStatus(
-        "CONNECTING"
-      );
+      setStatus("CONNECTING");
     };
 
-    /**
-     * Rejected.
-     */
-    const onRejected = (
-      payload: {
-        call: Call;
-      }
-    ) => {
+    const onRejected = (payload: {
+      call: Call;
+    }) => {
       if (
         !payload?.call ||
         !callRef.current
@@ -777,14 +559,9 @@ export function CallOverlay({
       cleanup();
     };
 
-    /**
-     * Remote ended.
-     */
-    const onEnded = (
-      payload: {
-        call: Call;
-      }
-    ) => {
+    const onEnded = (payload: {
+      call: Call;
+    }) => {
       if (
         !payload?.call ||
         !callRef.current
@@ -802,72 +579,26 @@ export function CallOverlay({
       cleanup();
     };
 
-    socket.on(
-      "call:incoming",
-      onIncoming
-    );
+    socket.on("call:incoming", onIncoming);
+    socket.on("call:accepted", onAccepted);
+    socket.on("call:rejected", onRejected);
+    socket.on("call:ended", onEnded);
 
-    socket.on(
-      "call:accepted",
-      onAccepted
-    );
-
-    socket.on(
-      "call:rejected",
-      onRejected
-    );
-
-    socket.on(
-      "call:ended",
-      onEnded
-    );
-
-    socket.on(
-      "webrtc:offer",
-      onOffer
-    );
-
-    socket.on(
-      "webrtc:answer",
-      onAnswer
-    );
-
+    socket.on("webrtc:offer", onOffer);
+    socket.on("webrtc:answer", onAnswer);
     socket.on(
       "webrtc:ice-candidate",
       onIceCandidate
     );
 
     return () => {
-      socket.off(
-        "call:incoming",
-        onIncoming
-      );
+      socket.off("call:incoming", onIncoming);
+      socket.off("call:accepted", onAccepted);
+      socket.off("call:rejected", onRejected);
+      socket.off("call:ended", onEnded);
 
-      socket.off(
-        "call:accepted",
-        onAccepted
-      );
-
-      socket.off(
-        "call:rejected",
-        onRejected
-      );
-
-      socket.off(
-        "call:ended",
-        onEnded
-      );
-
-      socket.off(
-        "webrtc:offer",
-        onOffer
-      );
-
-      socket.off(
-        "webrtc:answer",
-        onAnswer
-      );
-
+      socket.off("webrtc:offer", onOffer);
+      socket.off("webrtc:answer", onAnswer);
       socket.off(
         "webrtc:ice-candidate",
         onIceCandidate
@@ -875,31 +606,17 @@ export function CallOverlay({
     };
   }, [me.id]);
 
-  /**
-   * Start outgoing call.
-   *
-   * The UI dispatches a browser event:
-   *
-   * window.dispatchEvent(
-   *   new CustomEvent("call", {
-   *     detail: {
-   *       receiver,
-   *       type: "VOICE"
-   *     }
-   *   })
-   * )
+  /*
+   * Outgoing call event.
    */
   useEffect(() => {
-    const startCall = async (
-      event: Event
-    ) => {
-      const custom =
-        event as CustomEvent;
+    const startCall = async (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const detail = customEvent.detail;
 
-      const detail =
-        custom.detail;
-
-      if (!detail) return;
+      if (!detail) {
+        return;
+      }
 
       const receiver =
         detail.receiver ??
@@ -915,9 +632,7 @@ export function CallOverlay({
         return;
       }
 
-      if (
-        receiver.id === me.id
-      ) {
+      if (receiver.id === me.id) {
         return;
       }
 
@@ -935,33 +650,20 @@ export function CallOverlay({
 
       try {
         setError(null);
-        setStatus(
-          "CONNECTING"
-        );
+        setStatus("CONNECTING");
 
-        /**
-         * Create DB call.
-         */
         const call =
           await new Promise<Call>(
-            (
-              resolve,
-              reject
-            ) => {
+            (resolve, reject) => {
               socket.emit(
                 "call:initiate",
                 {
-                  receiverId:
-                    receiver.id,
+                  receiverId: receiver.id,
                   type,
                 },
                 (response: any) => {
-                  if (
-                    response?.success
-                  ) {
-                    resolve(
-                      response.data
-                    );
+                  if (response?.success) {
+                    resolve(response.data);
                   } else {
                     reject(
                       new Error(
@@ -975,24 +677,14 @@ export function CallOverlay({
             }
           );
 
-        callRef.current =
-          call;
-
-        peerRef.current =
-          receiver;
+        callRef.current = call;
+        peerRef.current = receiver;
 
         setCall(call);
         setPeer(receiver);
 
-        /**
-         * Ask microphone/camera permission.
-         */
-        const stream =
-          await getMedia(type);
+        const stream = await getMedia(type);
 
-        /**
-         * Create PeerConnection.
-         */
         const pc =
           await createPeerConnection(
             call,
@@ -1000,37 +692,21 @@ export function CallOverlay({
             stream
           );
 
-        /**
-         * Caller creates offer.
-         */
-        const offer =
-          await pc.createOffer({
-            offerToReceiveAudio:
-              true,
-            offerToReceiveVideo:
-              type === "VIDEO",
-          });
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo:
+            type === "VIDEO",
+        });
 
-        await pc.setLocalDescription(
-          offer
-        );
+        await pc.setLocalDescription(offer);
 
-        /**
-         * Send offer.
-         */
-        socket.emit(
-          "webrtc:offer",
-          {
-            callId: call.id,
-            targetId:
-              receiver.id,
-            sdp: offer,
-          }
-        );
+        socket.emit("webrtc:offer", {
+          callId: call.id,
+          targetId: receiver.id,
+          sdp: offer,
+        });
 
-        setStatus(
-          "CALLING"
-        );
+        setStatus("CALLING");
       } catch (err) {
         console.error(
           "Unable to start call",
@@ -1060,40 +736,25 @@ export function CallOverlay({
     };
   }, [me.id]);
 
-  /**
+  /*
    * Accept incoming call.
    */
   const acceptCall = async () => {
-    const currentCall =
-      callRef.current;
+    const currentCall = callRef.current;
+    const currentPeer = peerRef.current;
 
-    const currentPeer =
-      peerRef.current;
-
-    if (
-      !currentCall ||
-      !currentPeer
-    ) {
+    if (!currentCall || !currentPeer) {
       return;
     }
 
     try {
       setError(null);
-      setStatus(
-        "CONNECTING"
+      setStatus("CONNECTING");
+
+      const stream = await getMedia(
+        currentCall.type
       );
 
-      /**
-       * Get mic/camera.
-       */
-      const stream =
-        await getMedia(
-          currentCall.type
-        );
-
-      /**
-       * Create PC.
-       */
       const pc =
         await createPeerConnection(
           currentCall,
@@ -1101,92 +762,50 @@ export function CallOverlay({
           stream
         );
 
-      /**
-       * Offer may already have arrived.
-       */
-      const offer =
-        pendingOfferRef.current;
+      const offer = pendingOfferRef.current;
 
       if (!offer) {
-        /**
-         * Tell backend call accepted,
-         * but keep UI in connecting state.
-         *
-         * Offer can still arrive shortly.
-         */
         socket.emit(
           "call:accept",
           {
-            callId:
-              currentCall.id,
+            callId: currentCall.id,
           },
           () => {}
         );
 
-        setStatus(
-          "CONNECTING"
-        );
-
+        setStatus("CONNECTING");
         return;
       }
 
-      /**
-       * Apply caller offer.
-       */
       await pc.setRemoteDescription(
-        new RTCSessionDescription(
-          offer
-        )
+        new RTCSessionDescription(offer)
       );
 
-      /**
-       * Flush any ICE that arrived
-       * before remote description.
-       */
-      await flushPendingIce(
-        pc
-      );
+      await flushPendingIce(pc);
 
-      /**
-       * Create answer.
-       */
       const answer =
         await pc.createAnswer();
 
-      await pc.setLocalDescription(
-        answer
-      );
+      await pc.setLocalDescription(answer);
 
-      /**
-       * Update DB call status.
-       */
       socket.emit(
         "call:accept",
         {
-          callId:
-            currentCall.id,
+          callId: currentCall.id,
         },
         () => {}
       );
 
-      /**
-       * Send WebRTC answer.
-       */
       socket.emit(
         "webrtc:answer",
         {
-          callId:
-            currentCall.id,
-          targetId:
-            currentPeer.id,
+          callId: currentCall.id,
+          targetId: currentPeer.id,
           sdp: answer,
         }
       );
 
-      setStatus(
-        "CONNECTED"
-      );
-
+      setStatus("CONNECTED");
       void playRemoteAudio();
     } catch (err) {
       console.error(
@@ -1202,12 +821,11 @@ export function CallOverlay({
     }
   };
 
-  /**
+  /*
    * Reject incoming call.
    */
   const rejectCall = () => {
-    const currentCall =
-      callRef.current;
+    const currentCall = callRef.current;
 
     if (!currentCall) {
       return;
@@ -1216,8 +834,7 @@ export function CallOverlay({
     socket.emit(
       "call:reject",
       {
-        callId:
-          currentCall.id,
+        callId: currentCall.id,
       },
       () => {}
     );
@@ -1225,19 +842,17 @@ export function CallOverlay({
     cleanup();
   };
 
-  /**
+  /*
    * End active call.
    */
   const endCall = () => {
-    const currentCall =
-      callRef.current;
+    const currentCall = callRef.current;
 
     if (currentCall) {
       socket.emit(
         "call:end",
         {
-          callId:
-            currentCall.id,
+          callId: currentCall.id,
         },
         () => {}
       );
@@ -1246,14 +861,15 @@ export function CallOverlay({
     cleanup();
   };
 
-  /**
-   * Mute/unmute microphone.
+  /*
+   * Toggle microphone.
    */
   const toggleMute = () => {
-    const stream =
-      localStreamRef.current;
+    const stream = localStreamRef.current;
 
-    if (!stream) return;
+    if (!stream) {
+      return;
+    }
 
     const audioTracks =
       stream.getAudioTracks();
@@ -1262,27 +878,24 @@ export function CallOverlay({
       return;
     }
 
-    const nextMuted =
-      !muted;
+    const nextMuted = !muted;
 
     for (const track of audioTracks) {
-      track.enabled =
-        !nextMuted;
+      track.enabled = !nextMuted;
     }
 
-    setMuted(
-      nextMuted
-    );
+    setMuted(nextMuted);
   };
 
-  /**
-   * Camera ON/OFF.
+  /*
+   * Toggle camera.
    */
   const toggleCamera = () => {
-    const stream =
-      localStreamRef.current;
+    const stream = localStreamRef.current;
 
-    if (!stream) return;
+    if (!stream) {
+      return;
+    }
 
     const videoTracks =
       stream.getVideoTracks();
@@ -1291,36 +904,27 @@ export function CallOverlay({
       return;
     }
 
-    const nextOff =
-      !cameraOff;
+    const nextOff = !cameraOff;
 
     for (const track of videoTracks) {
-      track.enabled =
-        !nextOff;
+      track.enabled = !nextOff;
     }
 
-    setCameraOff(
-      nextOff
-    );
+    setCameraOff(nextOff);
   };
 
-  /**
-   * If no call, render nothing.
-   */
   if (!call || !peer) {
     return null;
   }
 
-  const isVideo =
-    call.type === "VIDEO";
+  const isVideo = call.type === "VIDEO";
 
   const isIncoming =
     status === "RINGING" &&
     call.receiverId === me.id;
 
   const isConnecting =
-    status ===
-      "CONNECTING" ||
+    status === "CONNECTING" ||
     status === "CALLING";
 
   return (
@@ -1329,7 +933,6 @@ export function CallOverlay({
       role="dialog"
       aria-modal="true"
     >
-      {/* Remote video */}
       {isVideo && (
         <video
           ref={remoteVideoRef}
@@ -1339,7 +942,6 @@ export function CallOverlay({
         />
       )}
 
-      {/* Voice/video background */}
       <div className="call-background">
         <div className="call-header">
           <div className="call-peer-info">
@@ -1347,9 +949,7 @@ export function CallOverlay({
               {peer.avatar ? (
                 <img
                   src={peer.avatar}
-                  alt={
-                    peer.displayName
-                  }
+                  alt={peer.displayName}
                 />
               ) : (
                 peer.displayName
@@ -1364,19 +964,15 @@ export function CallOverlay({
               </div>
 
               <div className="call-status">
-                {status ===
-                "CONNECTED"
-                  ? formatTime(
-                      seconds
-                    )
+                {status === "CONNECTED"
+                  ? formatTime(seconds)
                   : isIncoming
                   ? `Incoming ${
                       isVideo
                         ? "video"
                         : "voice"
                     } call`
-                  : status ===
-                    "CALLING"
+                  : status === "CALLING"
                   ? "Calling..."
                   : "Connecting..."}
               </div>
@@ -1384,16 +980,13 @@ export function CallOverlay({
           </div>
         </div>
 
-        {/* Main remote avatar for voice calls */}
         {!isVideo && (
           <div className="call-main-avatar">
             <div className="call-large-avatar">
               {peer.avatar ? (
                 <img
                   src={peer.avatar}
-                  alt={
-                    peer.displayName
-                  }
+                  alt={peer.displayName}
                 />
               ) : (
                 peer.displayName
@@ -1407,11 +1000,8 @@ export function CallOverlay({
             </div>
 
             <div className="call-large-status">
-              {status ===
-              "CONNECTED"
-                ? formatTime(
-                    seconds
-                  )
+              {status === "CONNECTED"
+                ? formatTime(seconds)
                 : isIncoming
                 ? "Incoming call"
                 : isConnecting
@@ -1421,7 +1011,6 @@ export function CallOverlay({
           </div>
         )}
 
-        {/* Local video */}
         {isVideo && (
           <div className="call-local-video-wrapper">
             <video
@@ -1440,17 +1029,14 @@ export function CallOverlay({
           </div>
         )}
 
-        {/* Connection warning */}
         {isVideo &&
           !remoteVideo &&
-          status ===
-            "CONNECTED" && (
+          status === "CONNECTED" && (
             <div className="call-connection-label">
               Waiting for remote video...
             </div>
           )}
 
-        {/* Audio blocked */}
         {audioBlocked && (
           <button
             type="button"
@@ -1463,22 +1049,18 @@ export function CallOverlay({
           </button>
         )}
 
-        {/* Error */}
         {error && (
           <div className="call-error">
             {error}
           </div>
         )}
 
-        {/* Incoming actions */}
         {isIncoming ? (
           <div className="call-incoming-actions">
             <button
               type="button"
               className="call-action call-reject"
-              onClick={
-                rejectCall
-              }
+              onClick={rejectCall}
               aria-label="Reject call"
             >
               ✕
@@ -1487,67 +1069,50 @@ export function CallOverlay({
             <button
               type="button"
               className="call-action call-accept"
-              onClick={
-                acceptCall
-              }
+              onClick={acceptCall}
               aria-label="Accept call"
             >
               ✓
             </button>
           </div>
         ) : (
-          /* Active call controls */
           <div className="call-controls">
             {isVideo && (
               <button
                 type="button"
                 className={`call-control ${
-                  cameraOff
-                    ? "active"
-                    : ""
+                  cameraOff ? "active" : ""
                 }`}
-                onClick={
-                  toggleCamera
-                }
+                onClick={toggleCamera}
                 aria-label={
                   cameraOff
                     ? "Turn camera on"
                     : "Turn camera off"
                 }
               >
-                {cameraOff
-                  ? "📷"
-                  : "📹"}
+                {cameraOff ? "📷" : "📹"}
               </button>
             )}
 
             <button
               type="button"
               className={`call-control ${
-                muted
-                  ? "active"
-                  : ""
+                muted ? "active" : ""
               }`}
-              onClick={
-                toggleMute
-              }
+              onClick={toggleMute}
               aria-label={
                 muted
                   ? "Unmute microphone"
                   : "Mute microphone"
               }
             >
-              {muted
-                ? "🔇"
-                : "🎙️"}
+              {muted ? "🔇" : "🎙️"}
             </button>
 
             <button
               type="button"
               className="call-control call-end"
-              onClick={
-                endCall
-              }
+              onClick={endCall}
               aria-label="End call"
             >
               ☎
@@ -1556,7 +1121,6 @@ export function CallOverlay({
         )}
       </div>
 
-      {/* Remote audio must stay mounted */}
       <audio
         ref={remoteAudioRef}
         autoPlay
