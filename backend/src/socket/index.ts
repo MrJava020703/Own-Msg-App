@@ -1,8 +1,514 @@
-import type {Server,Socket} from 'socket.io';import type{ClientToServerEvents,ServerToClientEvents}from '../types/index.js';import{users}from '../services/user.service.js';import{conversations}from '../services/conversation.service.js';import{messages}from '../services/message.service.js';import{prisma}from '../config/database.js';
-type S=Socket<ClientToServerEvents,ServerToClientEvents>;const ok=(a:any,d:any)=>a?.({success:true,data:d});const fail=(a:any,e:unknown)=>a?.({success:false,error:e instanceof Error?e.message:'Request failed'});
-export function socketHandlers(io:Server<ClientToServerEvents,ServerToClientEvents>){const active=new Map<string,Set<string>>(),owners=new Map<string,string>();const emit=(id:string,event:any,payload:any)=>{for(const socketId of active.get(id)??[])io.to(socketId).emit(event,payload)};const presence=async(id:string)=>{const u=await users.public(id);if(u)io.emit('presence:updated',{userId:id,status:u.status,lastSeen:u.lastSeen})};
- io.on('connection',(socket:S)=>{let userId:string|undefined;socket.on('user:join',async(p,a)=>{try{const u=await users.public(p.userId);if(!u)throw Error('Unknown user');const old=owners.get(socket.id);if(old&&old!==p.userId)active.get(old)?.delete(socket.id);userId=p.userId;owners.set(socket.id,userId);const sessions=active.get(userId)??new Set;const first=sessions.size===0;sessions.add(socket.id);active.set(userId,sessions);await users.attach(userId,socket.id);ok(a,await users.public(userId));if(first)await presence(userId)}catch(e){fail(a,e)}});
- socket.on('conversation:create',async(p,a)=>{try{if(!userId)throw Error('Join first');ok(a,await conversations.privateFor(userId,p.receiverId))}catch(e){fail(a,e)}});socket.on('conversation:join',async(p,a)=>{try{if(!userId)throw Error('Join first');await conversations.assertMember(p.conversationId,userId);socket.join('conversation:'+p.conversationId);ok(a,true)}catch(e){fail(a,e)}});
- socket.on('message:send',async(p,a)=>{try{if(!userId)throw Error('Join first');const m=await messages.create(userId,p);ok(a,m);emit(userId,'message:sent',m);emit(p.receiverId,'message:new',m)}catch(e){fail(a,e)}});socket.on('message:delivered',async(p,a)=>{try{if(!userId)throw Error('Join first');const m=await messages.deliver(p.messageId,userId);emit(m.senderId,'message:delivered',{messageId:m.id,userId});ok(a,true)}catch(e){fail(a,e)}});socket.on('message:read',async(p,a)=>{try{if(!userId)throw Error('Join first');for(const m of await messages.markRead(p.conversationId,userId))emit(m.senderId,'message:read',{messageId:m.id,userId,readAt:new Date()});ok(a,true)}catch(e){fail(a,e)}});
- socket.on('message:edit',async(p,a)=>{try{if(!userId)throw Error('Join first');const m=await messages.edit(p.messageId,userId,p.content);emit(m.senderId,'message:updated',m);emit(m.receiverId,'message:updated',m);ok(a,m)}catch(e){fail(a,e)}});socket.on('message:delete',async(p,a)=>{try{if(!userId)throw Error('Join first');const m=await messages.remove(p.messageId,userId);emit(m.senderId,'message:deleted',m);emit(m.receiverId,'message:deleted',m);ok(a,m)}catch(e){fail(a,e)}});socket.on('message:react',async(p,a)=>{try{if(!userId)throw Error('Join first');const m=await messages.react(p.messageId,userId,p.emoji);emit(m.senderId,'message:reaction',m);emit(m.receiverId,'message:reaction',m);ok(a,m)}catch(e){fail(a,e)}});
- socket.on('typing:start',async p=>{if(userId){const u=await users.public(userId);if(u)emit(p.receiverId,'typing:start',{conversationId:p.conversationId,user:u})}});socket.on('typing:stop',p=>{if(userId)emit(p.receiverId,'typing:stop',{conversationId:p.conversationId,userId})});socket.on('call:initiate',async(p,a)=>{try{if(!userId)throw Error('Join first');const call=await prisma.call.create({data:{callerId:userId,receiverId:p.receiverId,type:p.type}});const caller=await users.public(userId);if(caller)emit(p.receiverId,'call:incoming',{call,caller});ok(a,call)}catch(e){fail(a,e)}});for(const[event,status,notify]of[['call:accept','ACCEPTED','call:accepted'],['call:reject','REJECTED','call:rejected'],['call:end','ENDED','call:ended']]as const)socket.on(event as never,async(p:any,a:any)=>{try{if(!userId)throw Error('Join first');const c=await prisma.call.findUniqueOrThrow({where:{id:p.callId}});if(c.callerId!==userId&&c.receiverId!==userId)throw Error('Call access denied');const call=await prisma.call.update({where:{id:c.id},data:{status,startedAt:status==='ACCEPTED'?new Date():c.startedAt,endedAt:status==='ENDED'?new Date():null}});emit(call.callerId,notify,{call});emit(call.receiverId,notify,{call});ok(a,call)}catch(e){fail(a,e)}});for(const event of['webrtc:offer','webrtc:answer','webrtc:ice-candidate']as const)socket.on(event,(p:any)=>{if(userId)emit(p.targetId,event,{...p,fromId:userId})});socket.on('disconnect',async()=>{const id=userId??owners.get(socket.id);owners.delete(socket.id);if(!id)return;const sessions=active.get(id);sessions?.delete(socket.id);await users.detach(socket.id);if(!sessions?.size){active.delete(id);await presence(id)}})});}
+import type { Server, Socket } from "socket.io";
+import type {
+  ClientToServerEvents,
+  ServerToClientEvents,
+} from "../types/index.js";
+
+import { users } from "../services/user.service.js";
+import { conversations } from "../services/conversation.service.js";
+import { messages } from "../services/message.service.js";
+import { prisma } from "../config/database.js";
+
+type S = Socket<ClientToServerEvents, ServerToClientEvents>;
+
+const ok = (ack: any, data: any) =>
+  ack?.({
+    success: true,
+    data,
+  });
+
+const fail = (ack: any, error: unknown) =>
+  ack?.({
+    success: false,
+    error: error instanceof Error ? error.message : "Request failed",
+  });
+
+export function socketHandlers(
+  io: Server<ClientToServerEvents, ServerToClientEvents>
+) {
+  /**
+   * userId -> socket IDs
+   * This is used only for direct user notifications/presence.
+   */
+  const activeSockets = new Map<string, Set<string>>();
+
+  /**
+   * socketId -> userId
+   */
+  const socketOwners = new Map<string, string>();
+
+  const emitToUser = (
+    userId: string,
+    event: string,
+    payload: unknown
+  ) => {
+    const socketIds = activeSockets.get(userId);
+
+    if (!socketIds) return;
+
+    for (const socketId of socketIds) {
+      io.to(socketId).emit(event as any, payload);
+    }
+  };
+
+  const emitPresence = async (userId: string) => {
+    const user = await users.public(userId);
+
+    if (!user) return;
+
+    io.emit("presence:updated", {
+      userId,
+      status: user.status,
+      lastSeen: user.lastSeen,
+    });
+  };
+
+  const registerSocket = async (userId: string, socketId: string) => {
+    const existingOwner = socketOwners.get(socketId);
+
+    if (existingOwner && existingOwner !== userId) {
+      const oldSet = activeSockets.get(existingOwner);
+
+      oldSet?.delete(socketId);
+
+      if (!oldSet?.size) {
+        activeSockets.delete(existingOwner);
+      }
+    }
+
+    socketOwners.set(socketId, userId);
+
+    let socketSet = activeSockets.get(userId);
+
+    if (!socketSet) {
+      socketSet = new Set<string>();
+      activeSockets.set(userId, socketSet);
+    }
+
+    const firstConnection = socketSet.size === 0;
+
+    socketSet.add(socketId);
+
+    await users.attach(userId, socketId);
+
+    return firstConnection;
+  };
+
+  io.on("connection", (socket: S) => {
+    let userId: string | undefined;
+
+    /**
+     * LOGIN / RECONNECT
+     */
+    socket.on("user:join", async (payload, ack) => {
+      try {
+        const user = await users.public(payload.userId);
+
+        if (!user) {
+          throw new Error("Unknown user");
+        }
+
+        userId = user.id;
+
+        const firstConnection = await registerSocket(
+          user.id,
+          socket.id
+        );
+
+        ok(ack, await users.public(user.id));
+
+        if (firstConnection) {
+          await emitPresence(user.id);
+        }
+      } catch (error) {
+        fail(ack, error);
+      }
+    });
+
+    /**
+     * CREATE / GET PRIVATE CONVERSATION
+     */
+    socket.on("conversation:create", async (payload, ack) => {
+      try {
+        if (!userId) {
+          throw new Error("Join first");
+        }
+
+        const conversation = await conversations.privateFor(
+          userId,
+          payload.receiverId
+        );
+
+        ok(ack, conversation);
+      } catch (error) {
+        fail(ack, error);
+      }
+    });
+
+    /**
+     * JOIN CONVERSATION ROOM
+     *
+     * Every client must join its conversation room.
+     */
+    socket.on("conversation:join", async (payload, ack) => {
+      try {
+        if (!userId) {
+          throw new Error("Join first");
+        }
+
+        await conversations.assertMember(
+          payload.conversationId,
+          userId
+        );
+
+        await socket.join(`conversation:${payload.conversationId}`);
+
+        ok(ack, true);
+      } catch (error) {
+        fail(ack, error);
+      }
+    });
+
+    /**
+     * SEND MESSAGE
+     */
+    socket.on("message:send", async (payload, ack) => {
+      try {
+        if (!userId) {
+          throw new Error("Join first");
+        }
+
+        const message = await messages.create(userId, payload);
+
+        /**
+         * ACK sender immediately.
+         */
+        ok(ack, message);
+
+        /**
+         * Sender's other tabs/devices.
+         */
+        emitToUser(userId, "message:sent", message);
+
+        /**
+         * Receiver's all connected tabs/devices.
+         */
+        emitToUser(
+          payload.receiverId,
+          "message:new",
+          message
+        );
+
+        /**
+         * Conversation room fallback.
+         * Useful when both clients are already inside the room.
+         */
+        io.to(`conversation:${payload.conversationId}`).emit(
+          "message:new",
+          message
+        );
+      } catch (error) {
+        fail(ack, error);
+      }
+    });
+
+    /**
+     * DELIVERED
+     */
+    socket.on("message:delivered", async (payload, ack) => {
+      try {
+        if (!userId) {
+          throw new Error("Join first");
+        }
+
+        const message = await messages.deliver(
+          payload.messageId,
+          userId
+        );
+
+        emitToUser(message.senderId, "message:delivered", {
+          messageId: message.id,
+          userId,
+          deliveredAt: new Date(),
+        });
+
+        ok(ack, true);
+      } catch (error) {
+        fail(ack, error);
+      }
+    });
+
+    /**
+     * READ
+     */
+    socket.on("message:read", async (payload, ack) => {
+      try {
+        if (!userId) {
+          throw new Error("Join first");
+        }
+
+        const readMessages = await messages.markRead(
+          payload.conversationId,
+          userId
+        );
+
+        for (const message of readMessages) {
+          emitToUser(message.senderId, "message:read", {
+            messageId: message.id,
+            userId,
+            readAt: new Date(),
+          });
+        }
+
+        ok(ack, true);
+      } catch (error) {
+        fail(ack, error);
+      }
+    });
+
+    /**
+     * EDIT
+     */
+    socket.on("message:edit", async (payload, ack) => {
+      try {
+        if (!userId) {
+          throw new Error("Join first");
+        }
+
+        const message = await messages.edit(
+          payload.messageId,
+          userId,
+          payload.content
+        );
+
+        emitToUser(message.senderId, "message:updated", message);
+        emitToUser(message.receiverId, "message:updated", message);
+
+        ok(ack, message);
+      } catch (error) {
+        fail(ack, error);
+      }
+    });
+
+    /**
+     * DELETE
+     */
+    socket.on("message:delete", async (payload, ack) => {
+      try {
+        if (!userId) {
+          throw new Error("Join first");
+        }
+
+        const message = await messages.remove(
+          payload.messageId,
+          userId
+        );
+
+        emitToUser(message.senderId, "message:deleted", message);
+        emitToUser(message.receiverId, "message:deleted", message);
+
+        ok(ack, message);
+      } catch (error) {
+        fail(ack, error);
+      }
+    });
+
+    /**
+     * REACTION
+     */
+    socket.on("message:react", async (payload, ack) => {
+      try {
+        if (!userId) {
+          throw new Error("Join first");
+        }
+
+        const message = await messages.react(
+          payload.messageId,
+          userId,
+          payload.emoji
+        );
+
+        emitToUser(message.senderId, "message:reaction", message);
+        emitToUser(message.receiverId, "message:reaction", message);
+
+        ok(ack, message);
+      } catch (error) {
+        fail(ack, error);
+      }
+    });
+
+    /**
+     * TYPING START
+     */
+    socket.on("typing:start", async (payload) => {
+      if (!userId) return;
+
+      const user = await users.public(userId);
+
+      if (!user) return;
+
+      emitToUser(payload.receiverId, "typing:start", {
+        conversationId: payload.conversationId,
+        user,
+      });
+    });
+
+    /**
+     * TYPING STOP
+     */
+    socket.on("typing:stop", (payload) => {
+      if (!userId) return;
+
+      emitToUser(payload.receiverId, "typing:stop", {
+        conversationId: payload.conversationId,
+        userId,
+      });
+    });
+
+    /**
+     * CALL INITIATE
+     */
+    socket.on("call:initiate", async (payload, ack) => {
+      try {
+        if (!userId) {
+          throw new Error("Join first");
+        }
+
+        const call = await prisma.call.create({
+          data: {
+            callerId: userId,
+            receiverId: payload.receiverId,
+            type: payload.type,
+          },
+        });
+
+        const caller = await users.public(userId);
+
+        if (caller) {
+          emitToUser(payload.receiverId, "call:incoming", {
+            call,
+            caller,
+          });
+        }
+
+        ok(ack, call);
+      } catch (error) {
+        fail(ack, error);
+      }
+    });
+
+    /**
+     * CALL STATUS
+     */
+    const callEvents = [
+      ["call:accept", "ACCEPTED", "call:accepted"],
+      ["call:reject", "REJECTED", "call:rejected"],
+      ["call:end", "ENDED", "call:ended"],
+    ] as const;
+
+    for (const [event, status, notifyEvent] of callEvents) {
+      socket.on(event as never, async (payload: any, ack: any) => {
+        try {
+          if (!userId) {
+            throw new Error("Join first");
+          }
+
+          const call = await prisma.call.findUniqueOrThrow({
+            where: {
+              id: payload.callId,
+            },
+          });
+
+          if (
+            call.callerId !== userId &&
+            call.receiverId !== userId
+          ) {
+            throw new Error("Call access denied");
+          }
+
+          const updatedCall = await prisma.call.update({
+            where: {
+              id: call.id,
+            },
+            data: {
+              status,
+              startedAt:
+                status === "ACCEPTED"
+                  ? new Date()
+                  : call.startedAt,
+              endedAt:
+                status === "ENDED"
+                  ? new Date()
+                  : call.endedAt,
+            },
+          });
+
+          emitToUser(
+            updatedCall.callerId,
+            notifyEvent,
+            {
+              call: updatedCall,
+            }
+          );
+
+          emitToUser(
+            updatedCall.receiverId,
+            notifyEvent,
+            {
+              call: updatedCall,
+            }
+          );
+
+          ok(ack, updatedCall);
+        } catch (error) {
+          fail(ack, error);
+        }
+      });
+    }
+
+    /**
+     * WEBRTC SIGNALING
+     */
+    const webrtcEvents = [
+      "webrtc:offer",
+      "webrtc:answer",
+      "webrtc:ice-candidate",
+    ] as const;
+
+    for (const event of webrtcEvents) {
+      socket.on(event, (payload: any) => {
+        if (!userId) return;
+
+        emitToUser(payload.targetId, event, {
+          ...payload,
+          fromId: userId,
+        });
+      });
+    }
+
+    /**
+     * DISCONNECT
+     */
+    socket.on("disconnect", async () => {
+      const id =
+        userId ??
+        socketOwners.get(socket.id);
+
+      socketOwners.delete(socket.id);
+
+      if (!id) return;
+
+      const socketSet = activeSockets.get(id);
+
+      socketSet?.delete(socket.id);
+
+      await users.detach(socket.id);
+
+      if (!socketSet?.size) {
+        activeSockets.delete(id);
+
+        await emitPresence(id);
+      }
+    });
+  });
+}
